@@ -1,0 +1,34 @@
+{
+  "asof_timezone": "UTC",
+  "fuzzy_matching": {
+    "enabled": true,
+    "threshold": 92
+  },
+  "source_priorities_by_type": {
+    "hr_attendance": 90,
+    "absence_details": 95,
+    "export_travel": 75,
+    "remote_working_request": 50,
+    "transport_arrival": 65,
+    "transport_departure": 65
+  },
+  "rules": {
+    "event_type_priority": [
+      "vacation",
+      "day_off",
+      "office_checkin",
+      "travel",
+      "working_format"
+    ],
+    "office_checkin_valid_hours": 16,
+    "working_format_default_location": "REMOTE"
+  },
+  "outputs": {
+    "dir": "out",
+    "csv": "employee_locations.csv",
+    "json": "employee_locations.json",
+    "excel": "employee_locations.xlsx"
+  },
+  "location_dictionary_path": "config/location_dictionary.csv"
+}
+
