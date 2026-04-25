@@ -33,10 +33,15 @@ def resolve_employees(events: pd.DataFrame, cfg: EntityResolutionConfig) -> pd.D
       4) Optional fuzzy match on name (token_set_ratio) among unmatched
     """
     df = events.copy()
-    df["email_n"] = df["email"].map(normalize_email)
-    df["employee_id_n"] = df["employee_id"].map(normalize_employee_id)
-    df["name_n"] = df["name"].map(normalize_name)
-    df["name_tokenset"] = df["name"].map(normalize_name_tokenset)
+    # Use apply() to preserve Python None values (map() may upcast to NaN).
+    df["email_n"] = df["email"].apply(normalize_email)
+    df["employee_id_n"] = df["employee_id"].apply(normalize_employee_id)
+    df["name_n"] = df["name"].apply(normalize_name)
+    df["name_tokenset"] = df["name"].apply(normalize_name_tokenset)
+
+    # Pandas may upcast None to NaN; normalize to real None so truthiness checks behave.
+    for col in ("email_n", "employee_id_n", "name_n", "name_tokenset"):
+        df[col] = df[col].where(df[col].notna(), None)
 
     employee_key: list[Optional[str]] = [None] * len(df)
 
@@ -47,9 +52,15 @@ def resolve_employees(events: pd.DataFrame, cfg: EntityResolutionConfig) -> pd.D
     def get_or_make_key(seed: str) -> str:
         return _stable_key(seed)
 
+    def is_missing(v: object) -> bool:
+        return v is None or (isinstance(v, float) and pd.isna(v))
+
     # Pass 1: email
     for i, r in df.iterrows():
         em = r["email_n"]
+        if is_missing(em):
+            continue
+        em = str(em)
         if em:
             if em not in email_to_key:
                 email_to_key[em] = get_or_make_key(f"email:{em}")
@@ -60,16 +71,36 @@ def resolve_employees(events: pd.DataFrame, cfg: EntityResolutionConfig) -> pd.D
         if employee_key[i] is not None:
             continue
         eid = r["employee_id_n"]
+        if is_missing(eid):
+            continue
+        eid = str(eid)
         if eid:
             if eid not in id_to_key:
                 id_to_key[eid] = get_or_make_key(f"id:{eid}")
             employee_key[i] = id_to_key[eid]
+
+    # Bridge: if an event already has a resolved key (from email/id),
+    # register its name token-set to that same key so name-only sources
+    # (like PDFs) can attach to the canonical identity.
+    for i, r in df.iterrows():
+        k = employee_key[i]
+        if k is None:
+            continue
+        nm = r["name_tokenset"]
+        if is_missing(nm):
+            continue
+        nm = str(nm)
+        if nm and nm not in name_to_key:
+            name_to_key[nm] = k
 
     # Pass 3: exact name (order-insensitive token set)
     for i, r in df.iterrows():
         if employee_key[i] is not None:
             continue
         nm = r["name_tokenset"]
+        if is_missing(nm):
+            continue
+        nm = str(nm)
         if nm:
             if nm not in name_to_key:
                 name_to_key[nm] = get_or_make_key(f"name:{nm}")

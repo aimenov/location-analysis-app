@@ -76,12 +76,41 @@ def infer_employee_locations_with_trace(
     base["is_active"] = active_flags[0]
     base["active_reason"] = active_flags[1]
 
+    # Ranking used when choosing among *active* candidates.
     rank_cols = ["employee_key", "event_type_rank", "source_priority", "start_ts"]
     base_sorted = base.sort_values(by=rank_cols, ascending=[True, True, False, False]).copy()
 
     active_sorted = base_sorted[base_sorted["is_active"]].copy()
     chosen_active = active_sorted.groupby("employee_key", as_index=False).head(1)
-    chosen_any = base_sorted.groupby("employee_key", as_index=False).head(1)
+
+    # Fallback when nothing is active: last-known evidence should be the most recent record
+    # at-or-before `asof`. Never use future-dated events for fallback.
+    base_past = base[base["start_ts"] <= asof].copy()
+    base_recent = base_past.sort_values(
+        by=["employee_key", "start_ts", "event_type_rank", "source_priority"],
+        ascending=[True, False, True, False],
+    ).copy()
+    chosen_any = base_recent.groupby("employee_key", as_index=False).head(1)
+    if chosen_any.empty:
+        # If every employee only has future-dated evidence relative to `asof`,
+        # return an empty locations table (caller can treat as UNKNOWN).
+        return (
+            pd.DataFrame(
+                columns=[
+                    "employee_key",
+                    "resolved_employee_id",
+                    "resolved_email",
+                    "resolved_name",
+                    "location",
+                    "chosen_event_type",
+                    "chosen_start_ts",
+                    "chosen_end_ts",
+                    "chosen_source",
+                    "chosen_source_priority",
+                ]
+            ),
+            pd.DataFrame(),
+        )
 
     chosen = chosen_any.merge(
         chosen_active[
@@ -112,7 +141,8 @@ def infer_employee_locations_with_trace(
         if et == "travel":
             return str(loc or "TRAVEL")
         if et == "office_checkin":
-            return str(loc or "OFFICE")
+            # Avoid a fake geography named "OFFICE" when the reader/site could not be mapped.
+            return str(loc or "Office (site unknown)")
         if et == "working_format":
             return str(loc or rules.working_format_default_location)
         return str(loc or "UNKNOWN")

@@ -17,10 +17,14 @@ logger = logging.getLogger(__name__)
 
 
 _HR_READER_CODE = re.compile(r"reader\s*:\s*(?P<code>[^-]+?)(?:\s*-\s*|$)", re.IGNORECASE)
+_XPRESSENTRY_PREFIX = re.compile(r"external\s+xpressentry\s*-\s*(?P<rest>.+)$", re.IGNORECASE)
 _PDF_LOCATION_RE = re.compile(
     r"Location:\s*(?P<loc>[A-Za-z0-9_]+)\s+(?:ETA|ETD):\s*(?P<dt>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2})",
     re.IGNORECASE,
 )
+_PDF_ROUTING_RE = re.compile(r"Routing:\s*(?P<route>[A-Z]{3}\s*-\s*[A-Z]{3})", re.IGNORECASE)
+_PDF_IATA_RE = re.compile(r"\b(?P<iata>[A-Z]{3})\b")
+_PDF_DT_RE = re.compile(r"(?P<dt>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2})")
 
 
 def _first_token_before_paren(s: str) -> str:
@@ -38,6 +42,11 @@ def _extract_office_code(reader_val: object) -> Optional[str]:
     m = _HR_READER_CODE.search(s)
     code = m.group("code").strip() if m else s
 
+    # Some readers come through as e.g. "External xpressentry - MCP - Turnstile 1"
+    xm = _XPRESSENTRY_PREFIX.search(code)
+    if xm:
+        code = xm.group("rest").strip()
+
     cu = code.upper()
     # Your offices: AS-Astana, AK-Aktau, AT-Atyrau, BT-Bautino, EW/Samal-Zapadny Eskene
     if "SAMAL" in cu or "ZAPAD" in cu:
@@ -52,6 +61,8 @@ def _extract_office_code(reader_val: object) -> Optional[str]:
         return "BT"
     if re.search(r"\bEW\b", cu):
         return "EW / Samal"
+    if re.search(r"\bMCP\b", cu):
+        return "MCP"
 
     # Unknown reader => not a meaningful office location for MVP.
     return None
@@ -360,6 +371,30 @@ def parse_transport_pdf(path: Path, *, side: str, source_label: str, source_prio
                 in_passenger_section = False
             continue
 
+        # Newer PDF layout: Routing: SCO-GUW (from -> to)
+        rm = _PDF_ROUTING_RE.search(ln)
+        if rm:
+            route = rm.group("route").replace(" ", "").upper()
+            parts = route.split("-")
+            if len(parts) == 2:
+                origin, dest = parts
+                current_loc = dest if side == "arrival" else origin
+                current_loc = _first_token_before_paren(current_loc)
+            # Try to find a datetime nearby on the same line
+            dm = _PDF_DT_RE.search(ln)
+            if dm:
+                current_dt = parse_dt(dm.group("dt"), tz=asof_tz, dayfirst=True)
+            in_passenger_section = True
+            continue
+
+        # If we don't have routing/location yet, still try to capture an IATA route token when line is short
+        if current_loc is None and "routing" in ln.lower():
+            iatas = [m.group("iata").upper() for m in _PDF_IATA_RE.finditer(ln)]
+            if len(iatas) >= 2:
+                current_loc = iatas[-1] if side == "arrival" else iatas[0]
+                in_passenger_section = True
+            continue
+
         if ln.upper().startswith("ATA:") or ln.upper().startswith("ATD:"):
             in_passenger_section = True
             continue
@@ -368,9 +403,14 @@ def parse_transport_pdf(path: Path, *, side: str, source_label: str, source_prio
             in_passenger_section = False
             continue
 
-        if in_passenger_section and current_dt is not None and current_loc is not None:
+        # Name lines can appear without explicit section markers; be permissive once we have loc+dt (or at least loc).
+        if (in_passenger_section or current_loc is not None) and current_loc is not None:
             name = _parse_name_from_pdf_line(ln)
             if name:
+                if current_dt is None:
+                    # As a last resort, anchor at start-of-day if pdf lacks a timestamp we can parse.
+                    # This keeps the record visible for debugging/audit; rules may still choose other evidence.
+                    current_dt = parse_dt("01.01.1970 00:00", tz=asof_tz, dayfirst=True)
                 events.append(
                     _make_event(
                         employee_id=None,

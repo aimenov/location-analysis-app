@@ -10,6 +10,7 @@ out/*
 
 build/
 dist/
+dist_release/
 out_exe_test/
 data/
 

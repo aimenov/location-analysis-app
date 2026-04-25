@@ -113,3 +113,74 @@ def test_office_checkin_decays_after_valid_hours() -> None:
     stale = trace[(trace["event_type"] == "office_checkin") & (trace["active_reason"] == "stale_checkin")]
     assert len(stale.index) == 1
 
+
+def test_fallback_prefers_most_recent_event_when_nothing_active() -> None:
+    # After both events ended / decayed, choose the most recent evidence as "last known".
+    asof = _dt("2026-04-20T12:00:00Z")
+    rules = RulesConfig(
+        event_type_priority=["vacation", "day_off", "office_checkin", "travel", "working_format"],
+        office_checkin_valid_hours=4,
+    )
+    loc = LocationDictionary(raw_to_canonical={"as": "Astana", "guw": "Atyrau"})
+
+    events = _events(
+        [
+            {
+                "employee_key": "e1",
+                "employee_id": "1",
+                "email": None,
+                "name": "Alice",
+                "event_type": "office_checkin",
+                "start_ts": _dt("2026-04-15T09:00:00Z"),
+                "end_ts": None,
+                "location_raw": "AS",
+                "source": "hr",
+                "source_priority": 90,
+            },
+            {
+                "employee_key": "e1",
+                "employee_id": "1",
+                "email": None,
+                "name": "Alice",
+                "event_type": "travel",
+                "start_ts": _dt("2026-04-16T08:45:00Z"),
+                "end_ts": _dt("2026-04-17T08:45:00Z"),
+                "location_raw": "GUW",
+                "source": "pdf",
+                "source_priority": 65,
+            },
+        ]
+    )
+
+    locations, trace = infer_employee_locations_with_trace(events=events, asof=asof, rules=rules, location_dict=loc)
+    row = locations.iloc[0]
+    assert row["chosen_event_type"] == "travel"
+    assert row["location"] == "Atyrau"
+
+
+def test_fallback_does_not_use_future_events() -> None:
+    asof = _dt("2026-04-01T12:00:00Z")
+    rules = RulesConfig(event_type_priority=["vacation", "day_off", "office_checkin", "travel", "working_format"])
+    loc = LocationDictionary(raw_to_canonical={"guw": "Atyrau"})
+
+    events = _events(
+        [
+            {
+                "employee_key": "e1",
+                "employee_id": None,
+                "email": None,
+                "name": "Alice",
+                "event_type": "travel",
+                "start_ts": _dt("2026-04-16T08:45:00Z"),
+                "end_ts": _dt("2026-04-17T08:45:00Z"),
+                "location_raw": "GUW",
+                "source": "pdf",
+                "source_priority": 65,
+            },
+        ]
+    )
+
+    locations, _trace = infer_employee_locations_with_trace(events=events, asof=asof, rules=rules, location_dict=loc)
+    # No past events exist for this employee at this as-of time.
+    assert locations.empty
+

@@ -43,17 +43,30 @@ def normalize_name_tokenset(name: Optional[str]) -> Optional[str]:
 
 
 def normalize_email(email: Optional[str]) -> Optional[str]:
-    if not email:
+    if email is None:
         return None
-    s = email.strip().lower()
-    return s or None
+    if isinstance(email, float) and email != email:
+        return None
+    s = str(email).strip().lower()
+    if not s:
+        return None
+    if s == "nan":
+        return None
+    return s
 
 
 def normalize_employee_id(employee_id: Optional[str]) -> Optional[str]:
-    if not employee_id:
+    if employee_id is None:
+        return None
+    # Handle pandas NaN without importing pandas.
+    if isinstance(employee_id, float) and employee_id != employee_id:
         return None
     s = str(employee_id).strip()
-    return s or None
+    if not s:
+        return None
+    if s.lower() == "nan":
+        return None
+    return s
 
 
 def parse_dt(value: Any, tz: str = "UTC", dayfirst: bool = False) -> datetime:

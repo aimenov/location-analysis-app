@@ -12,7 +12,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .entity_resolution import EntityResolutionConfig, resolve_employees
-from .location_dictionary import LocationDictionary
+from .location_dictionary import enrich_location_dictionary_in_place, implicit_location_dictionary
 from .normalize import events_to_frame
 from .report_discovery import ReportType, discover_reports
 from .report_parsers import parse_absence_details, parse_export_travel, parse_hr_attendance, parse_remote_working_request, parse_transport_pdf
@@ -74,23 +74,6 @@ class MVPConfig:
     output_csv: str
     output_json: str
     output_excel: str
-    location_dictionary_path: str
-
-
-def _resolve_config_relative_path(config_path: Path, raw_path: str) -> str:
-    candidate = Path(raw_path)
-    if candidate.is_absolute():
-        return str(candidate)
-
-    candidates = [
-        (config_path.parent / candidate).resolve(),
-        (config_path.parent.parent / candidate).resolve(),
-        candidate.resolve(),
-    ]
-    for path in candidates:
-        if path.exists():
-            return str(path)
-    return str(candidates[0])
 
 
 def load_config(path: str) -> MVPConfig:
@@ -122,10 +105,6 @@ def load_config(path: str) -> MVPConfig:
         output_csv=str(out_raw.get("csv", "employee_locations.csv")),
         output_json=str(out_raw.get("json", "employee_locations.json")),
         output_excel=str(out_raw.get("excel", "employee_locations.xlsx")),
-        location_dictionary_path=_resolve_config_relative_path(
-            config_path,
-            str(raw.get("location_dictionary_path", "config/location_dictionary.csv")),
-        ),
     )
 
 
@@ -159,23 +138,26 @@ def _build_presentable_locations(locations: pd.DataFrame) -> pd.DataFrame:
             "resolved_employee_id",
             "resolved_name",
             "location",
-            "chosen_event_type",
             "chosen_start_ts",
-            "chosen_end_ts",
+            "chosen_event_type",
             "chosen_source",
         ]
     ].rename(
         columns={
             "resolved_employee_id": "Employee ID",
             "resolved_name": "Employee Name",
-            "location": "Current Location",
-            "chosen_event_type": "Status Based On",
-            "chosen_start_ts": "Status Start",
-            "chosen_end_ts": "Status End",
-            "chosen_source": "Source Report",
+            "location": "Location",
+            "chosen_start_ts": "Recorded at",
+            "chosen_event_type": "Based on",
+            "chosen_source": "Report file",
         }
     )
     return presentable
+
+
+def presentable_locations_df(locations: pd.DataFrame) -> pd.DataFrame:
+    """Same columns as the Employee Locations Excel sheet (human-readable headers)."""
+    return _build_presentable_locations(locations)
 
 
 def _write_polished_excel(
@@ -190,9 +172,8 @@ def _write_polished_excel(
     report_info = pd.DataFrame(
         [
             {"Field": "Report generated for", "Value": asof.isoformat()},
-            {"Field": "Status Start", "Value": "Start of the event/window used to determine the employee's location"},
-            {"Field": "Status End", "Value": "End of the event/window used to determine the employee's location, if applicable"},
-            {"Field": "Status Based On", "Value": "Type of evidence that won in the rules engine (vacation, office check-in, travel, etc.)"},
+            {"Field": "Recorded at", "Value": "Timestamp of the event used to determine the employee's location"},
+            {"Field": "Based on", "Value": "Type of evidence that won in the rules engine (vacation, office check-in, travel, etc.)"},
         ]
     )
 
@@ -248,7 +229,7 @@ def _write_polished_excel(
                     _style_worksheet(ws_trace)
 
                 datetime_columns = {
-                    "Employee Locations": ["E", "F"],
+                    "Employee Locations": ["E"],
                     "Evidence": ["E", "F"],
                     "Decision Trace": ["M", "N"],
                 }
@@ -301,7 +282,7 @@ def run_pipeline(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     cfg = load_config(config_path)
 
-    location_dict = LocationDictionary.from_csv(cfg.location_dictionary_path)
+    location_dict = implicit_location_dictionary()
 
     logger.info("Run started. asof=%s input_dir=%s config=%s", asof.isoformat(), input_dir, config_path)
 
@@ -340,6 +321,14 @@ def run_pipeline(
         raise RuntimeError("No events loaded from sources.")
 
     logger.info("Total events loaded: %d", len(events_df.index))
+
+    # Make sure any previously unseen codes (e.g. airport/site codes) are at least visible as themselves.
+    try:
+        added = enrich_location_dictionary_in_place(location_dict, raw_values=events_df["location_raw"])
+        if added:
+            logger.info("Location dictionary enriched with %d new code(s) from inputs.", added)
+    except Exception:
+        logger.exception("Failed to enrich location dictionary from inputs.")
 
     resolved_events = resolve_employees(
         events_df,

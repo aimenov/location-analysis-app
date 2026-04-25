@@ -28,7 +28,6 @@
     "csv": "employee_locations.csv",
     "json": "employee_locations.json",
     "excel": "employee_locations.xlsx"
-  },
-  "location_dictionary_path": "config/location_dictionary.csv"
+  }
 }
 

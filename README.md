@@ -37,6 +37,22 @@ Outputs land in `out/`:
 - `out/employee_locations.json`
 - `out/employee_locations.xlsx` (includes `Evidence`, `Source Summary`, and `Decision Trace`)
 
+### Desktop viewer (Tkinter)
+
+Interactive UI to pick **date and time** and compute where each employee should be **at that moment**, with:
+
+- Dashboard: **count of employees per location** (respects filters)
+- Table filters: filter by **any column** or search **all columns**
+- **Show/hide** each output column
+
+Run from source:
+
+```bash
+python viewer_gui.py
+```
+
+Uses the bundled settings next to the app (`config/mvp_config.json`). You only choose **input** and **output** folders (defaults: `in/` and `out/`). Bundled dependencies are unchanged (stdlib UI + existing stack).
+
 ### Data model (normalized)
 
 All sources are normalized into an events table with (at least):
@@ -57,7 +73,7 @@ At a given **as-of time** (`--asof`), the engine selects the “best” evidence
   - `event_type_priority` (config, lower index wins)
   - `source_priority` (higher wins)
   - most recent `start_ts`
-- **Step 3**: map `location_raw` to a canonical label via `config/location_dictionary.csv`
+- **Step 3**: map `location_raw` to a canonical label using the **implicit** in-memory dictionary in `implicit_location_dictionary()` (`app/location_dictionary.py`), rebuilt before each run
 
 ### Where to extend
 
@@ -66,7 +82,7 @@ At a given **as-of time** (`--asof`), the engine selects the “best” evidence
   - Add a parser in `app/report_parsers.py`
   - Register it in `PARSERS_BY_TYPE` in `app/pipeline.py`
 - Tune entity resolution: `app/entity_resolution.py`
-- Tune location mapping: `config/location_dictionary.csv`
+- Tune location mapping: edit `_IMPLICIT_ROWS` / `implicit_location_dictionary()` in `app/location_dictionary.py`
 - Tune priorities & rules: `config/mvp_config.json`
 
 ### Tests
@@ -81,8 +97,11 @@ python -m pytest -q
 
 ```bash
 python -m pip install -r requirements.txt
+python -m pip install pyinstaller
 pyinstaller employee_location_app.spec
+pyinstaller employee_location_viewer.spec
 ```
 
-The resulting executable will write logs to `out/employee_location_app.log` and expects an `in/` folder next to the `.exe`.
+- **Batch pipeline / CLI**: `dist/employee_location_app.exe` — logs to `out/employee_location_app.log`, expects `in/` next to the `.exe`.
+- **Desktop viewer**: `dist/employee_location_viewer.exe` — logs to `out/viewer_app.log`, bundles `config/` like the other executable.
 
